@@ -1,10 +1,7 @@
 import React from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
-import Layout from './components/Layout'
-import VMList from './components/VMList'
-import ISOManager from './components/ISOManager'
-import VMConsole from './components/VMConsole'
-import VMSettings from './components/VMSettings'
+import { Routes, Route, Navigate, useParams } from 'react-router-dom'
+import HyperVManager from './components/hyperv/HyperVManager'
+import VMConnect from './components/hyperv/VMConnect'
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -23,14 +20,15 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '2rem', color: 'var(--error)' }}>
-          <h2>Something went wrong</h2>
-          <pre style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+        <div style={{ padding: '2rem', fontFamily: 'Segoe UI, Tahoma, sans-serif', color: '#1a1a1a' }}>
+          <h2 style={{ marginTop: 0, fontSize: 15 }}>Hyper-V Manager could not start</h2>
+          <pre style={{ fontSize: 12, color: '#616161', whiteSpace: 'pre-wrap' }}>
             {this.state.error?.message}
           </pre>
           <button
-            className="btn-primary"
-            style={{ marginTop: '1rem' }}
+            type="button"
+            className="btn btn-primary"
+            style={{ marginTop: 8 }}
             onClick={() => this.setState({ hasError: false, error: null })}
           >
             Try again
@@ -42,19 +40,21 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+function SettingsRoute() {
+  const { id } = useParams()
+  return <HyperVManager initialSettingsId={id} />
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<VMList />} />
-          <Route path="/isos" element={<ISOManager />} />
-          <Route path="/settings" element={<Navigate to="/" replace />} />
-          <Route path="/vm/:id" element={<VMConsole />} />
-          <Route path="/vm/:id/settings" element={<VMSettings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
+      <Routes>
+        <Route path="/" element={<HyperVManager />} />
+        <Route path="/isos" element={<HyperVManager initialNode="isos" />} />
+        <Route path="/vm/:id" element={<VMConnect />} />
+        <Route path="/vm/:id/settings" element={<SettingsRoute />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </ErrorBoundary>
   )
 }
