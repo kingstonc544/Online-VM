@@ -51,6 +51,7 @@ export default function HyperVManager({ initialNode = 'vms', initialSettingsId =
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadName, setUploadName] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
 
   const selectedVm = vms.find((vm) => vm.id === selectedId) || null
   const selectedIsoItem = isos.find((iso) => iso.name === selectedIso) || null
@@ -103,7 +104,13 @@ export default function HyperVManager({ initialNode = 'vms', initialSettingsId =
   }
 
   async function refreshAll() {
-    await Promise.all([refreshVMs(), refreshISOs({ silent: true })])
+    setRefreshing(true)
+    try {
+      await Promise.all([refreshVMs(), refreshISOs({ silent: true })])
+      notify('Virtual machines refreshed.')
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   function closeDialog() {
@@ -336,7 +343,15 @@ export default function HyperVManager({ initialNode = 'vms', initialSettingsId =
     { id: 'removeserver', icon: Server, title: 'Remove Server', disabled: true },
     { id: 'connectserver', icon: Server, title: 'Connect to Server', disabled: true },
     { id: 'sep-3', separator: true },
-    { id: 'refresh', icon: RefreshCw, title: 'Refresh', onClick: refreshAll },
+    {
+      id: 'refresh',
+      icon: RefreshCw,
+      title: 'Refresh',
+      label: 'Refresh',
+      spinning: refreshing,
+      disabled: refreshing,
+      onClick: refreshAll,
+    },
     { id: 'filter', icon: Filter, title: 'Filter', onClick: () => setDialog({ type: 'filter' }) },
     { id: 'help', icon: HelpCircle, title: 'Help', onClick: () => setDialog({ type: 'about' }) },
   ]

@@ -208,6 +208,16 @@ button { cursor: default; }
 
 .tool-btn:active:not(:disabled) { background: #cfe8ff; }
 .tool-btn:disabled { opacity: 0.38; }
+.tool-btn.labeled {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: #1f1f1f;
+}
+.tool-btn .spin { animation: hv-spin 0.9s linear infinite; }
 
 .tool-sep {
   width: 1px;
@@ -1023,7 +1033,32 @@ textarea.input { height: auto; min-height: 56px; resize: vertical; padding: 4px 
   position: relative;
 }
 
-.connect-iframe { width: 100%; height: 100%; border: 0; background: #000000; }
+.vnc-viewer { width: 100%; height: 100%; position: relative; background: #000000; }
+.vnc-screen { position: absolute; inset: 0; display: flex; }
+.vnc-screen > div, .vnc-screen canvas { width: 100%; height: 100%; }
+.vnc-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: #d6d6d6;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.72);
+}
+.vnc-overlay p { margin: 0; max-width: 460px; line-height: 1.55; }
+.vnc-overlay .vnc-error { color: #ffb4a8; }
+.vnc-password { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.vnc-password p { margin: 0; }
+.vnc-password input {
+  width: 220px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid #7a7a7a;
+  background: #ffffff;
+}
 
 .connect-off {
   display: flex;

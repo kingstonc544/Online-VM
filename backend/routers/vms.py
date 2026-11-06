@@ -14,10 +14,27 @@ router = APIRouter()
 # VM CRUD
 # ──────────────────────────────────────────────
 
+def vm_alive(vm: VMConfig) -> bool:
+    """True when the VM's QEMU process (or at least its VNC port) is still up."""
+    return qemu.is_running(vm.id) or qemu.vnc_port_open(vm.vnc_port)
+
+
+async def reconcile_status(vm: VMConfig) -> VMConfig:
+    """Bring the stored status in line with the real QEMU process."""
+    alive = vm_alive(vm)
+    if alive and vm.status in ("stopped", "error"):
+        vm.status = "running"
+        await store.save_vm(vm)
+    elif not alive and vm.status in ("running", "paused", "error"):
+        vm.status = "stopped"
+        await store.save_vm(vm)
+    return vm
+
+
 @router.get("/vms")
 async def list_vms():
     vms = await store.load_vms()
-    return list(vms.values())
+    return [await reconcile_status(VMConfig(**data)) for data in vms.values()]
 
 
 @router.post("/vms", status_code=201)
@@ -39,7 +56,7 @@ async def get_vm(vm_id: str):
     vm = await store.get_vm(vm_id)
     if not vm:
         raise HTTPException(status_code=404, detail="VM not found")
-    return vm
+    return await reconcile_status(vm)
 
 
 @router.put("/vms/{vm_id}")
@@ -79,8 +96,13 @@ async def start_vm(vm_id: str):
     vm = await store.get_vm(vm_id)
     if not vm:
         raise HTTPException(status_code=404, detail="VM not found")
-    if qemu.is_running(vm_id):
-        raise HTTPException(status_code=400, detail="VM is already running")
+    if qemu.is_running(vm_id) or qemu.vnc_port_open(vm.vnc_port):
+        # The QEMU process can outlive a backend reload; adopt it instead of
+        # spawning a second one on the same disk.
+        if vm.status != "running":
+            vm.status = "running"
+            await store.save_vm(vm)
+        return {"detail": "VM is already running", "vnc_port": vm.vnc_port}
 
     try:
         await qemu.start_vm(vm)
@@ -103,7 +125,10 @@ async def stop_vm(vm_id: str):
 
     try:
         await qemu.stop_vm(vm_id)
-        vm.status = "stopped"
+        # Only report "stopped" once QEMU actually exits; a guest without ACPI
+        # support keeps running after the power-down request.
+        await qemu.wait_for_exit(vm_id, timeout=3.0)
+        vm.status = "stopped" if not vm_alive(vm) else "running"
         await store.save_vm(vm)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

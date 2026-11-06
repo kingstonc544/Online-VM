@@ -12,13 +12,14 @@ export default function Toolbar({ items }) {
           <button
             key={item.id}
             type="button"
-            className="tool-btn"
+            className={`tool-btn${item.label ? ' labeled' : ''}`}
             title={item.title}
             aria-label={item.title}
             onClick={item.onClick}
             disabled={item.disabled}
           >
-            <Icon size={16} strokeWidth={1.7} />
+            <Icon size={16} strokeWidth={1.7} className={item.spinning ? 'spin' : undefined} />
+            {item.label && <span>{item.label}</span>}
           </button>
         )
       })}

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import * as api from '../api/client'
 
+const sameData = (left, right) => JSON.stringify(left) === JSON.stringify(right)
+
 export default function useVMs() {
   const [vms, setVMs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -10,7 +12,9 @@ export default function useVMs() {
     if (!silent) setLoading(true)
     try {
       const data = await api.getVMs()
-      setVMs(data)
+      // Keep the previous array when nothing changed so the whole UI does not
+      // re-render every poll tick.
+      setVMs((prev) => (sameData(prev, data) ? prev : data))
       setError(null)
     } catch (err) {
       setError(err?.response?.data?.detail || err.message || 'Failed to load virtual machines')
@@ -21,8 +25,20 @@ export default function useVMs() {
 
   useEffect(() => {
     refresh()
-    const timer = setInterval(() => refresh({ silent: true }), 5000)
-    return () => clearInterval(timer)
+    // Skip polling while the tab is hidden; refresh as soon as it returns.
+    const timer = setInterval(() => {
+      if (!document.hidden) refresh({ silent: true })
+    }, 5000)
+    const wake = () => {
+      if (!document.hidden) refresh({ silent: true })
+    }
+    window.addEventListener('focus', wake)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', wake)
+      document.removeEventListener('visibilitychange', wake)
+    }
   }, [refresh])
 
   const run = (fn) => async (...args) => {

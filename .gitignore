@@ -14,3 +14,4 @@ build/
 .venv/
 venv/
 *.sock
+frontend/vite.config.base44.mjs

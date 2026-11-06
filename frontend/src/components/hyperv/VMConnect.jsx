@@ -7,6 +7,7 @@ import {
   forceStopVM, getVM, pauseVM, resetVM, resumeVM, startVM, stopVM,
 } from '../../api/client'
 import { vmState } from '../../utils/format'
+import VNCViewer from './VNCViewer'
 
 export default function VMConnect() {
   const { id } = useParams()
@@ -52,7 +53,7 @@ export default function VMConnect() {
 
   const host = window.location.hostname
   const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
-  const noVNCUrl = `https://novnc.com/noVNC/vnc.html?host=${host}&port=${port}&path=ws/vnc/${id}&autoconnect=true&resize=scale`
+  const consoleUrl = `/vm/${id}`
 
   return (
     <div className="connect-page">
@@ -123,7 +124,7 @@ export default function VMConnect() {
           <a
             className="connect-tool-btn"
             style={{ textDecoration: 'none' }}
-            href={noVNCUrl}
+            href={consoleUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -141,11 +142,7 @@ export default function VMConnect() {
 
         <div className="connect-screen">
           {running ? (
-            <iframe
-              className="connect-iframe"
-              src={noVNCUrl}
-              title={`${vm?.name || 'Virtual machine'} console`}
-            />
+            <VNCViewer vmId={id} password={vm?.vnc_password} />
           ) : (
             <div className="connect-off">
               <Monitor size={46} color="#6d6d6d" />
