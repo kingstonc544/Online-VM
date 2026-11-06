@@ -595,6 +595,13 @@ textarea.input { height: auto; min-height: 56px; resize: vertical; padding: 4px 
 .option-title { font-weight: 600; }
 .option-desc { color: #666; font-size: 11.5px; margin-top: 1px; }
 
+.engine-option + .engine-option { margin-top: 4px; }
+.engine-unavailable {
+  margin: 0 0 2px 22px;
+  color: #8a5a00;
+  font-size: 11px;
+}
+
 .group-box {
   border: 1px solid #dcdcdc;
   background: #fcfcfc;

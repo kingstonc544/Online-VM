@@ -30,6 +30,10 @@ class VMConfig(BaseModel):
     vnc_port: int = 5900
     vnc_password: Optional[str] = None
     boot_order: str = "dc"
+    # Type of virtualization: auto (KVM when possible, else TCG), kvm or tcg.
+    virtualization: str = "auto"
+    # Guest CPU architecture: x86_64, i386, aarch64 or arm.
+    guest_arch: str = "x86_64"
     enable_kvm: bool = True
     enable_uefi: bool = False
     machine_type: str = "q35"
@@ -56,6 +60,8 @@ class VMCreate(BaseModel):
     display_type: str = "vnc"
     vnc_password: Optional[str] = None
     boot_order: str = "dc"
+    virtualization: str = "auto"
+    guest_arch: str = "x86_64"
     enable_kvm: bool = True
     enable_uefi: bool = False
     machine_type: str = "q35"
@@ -77,6 +83,8 @@ class VMUpdate(BaseModel):
     display_type: Optional[str] = None
     vnc_password: Optional[str] = None
     boot_order: Optional[str] = None
+    virtualization: Optional[str] = None
+    guest_arch: Optional[str] = None
     enable_kvm: Optional[bool] = None
     enable_uefi: Optional[bool] = None
     machine_type: Optional[str] = None

@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import {
   Camera, Cpu, Database, Disc, HardDrive, Monitor, Network, RotateCcw,
-  Settings2, Tag, Trash2, Usb, Volume2,
+  Settings2, Tag, Trash2, Usb, Volume2, Zap,
 } from 'lucide-react'
 import Dialog from './Dialog'
 import { CheckRow, Field, RadioRow } from './Controls'
 import ISOPickerDialog from './ISOPickerDialog'
+import VirtualizationSelector from './VirtualizationSelector'
 import useISOs from '../../hooks/useISOs'
+import useCapabilities from '../../hooks/useCapabilities'
 import {
   createSnapshot, deleteSnapshot, getVM, restoreSnapshot, updateVM,
 } from '../../api/client'
@@ -19,6 +21,7 @@ const SECTIONS = [
       { key: 'firmware', label: 'Firmware', icon: Settings2 },
       { key: 'memory', label: 'Memory', icon: Database },
       { key: 'processor', label: 'Processor', icon: Cpu },
+      { key: 'virtualization', label: 'Virtualization', icon: Zap },
       { key: 'harddrive', label: 'Hard Drive', icon: HardDrive },
       { key: 'dvd', label: 'DVD Drive', icon: Disc },
       { key: 'network', label: 'Network Adapter', icon: Network },
@@ -49,6 +52,8 @@ function toForm(vm) {
     network_interface: vm.network_interface,
     vnc_password: vm.vnc_password || '',
     boot_order: vm.boot_order,
+    virtualization: vm.virtualization || 'auto',
+    guest_arch: vm.guest_arch || 'x86_64',
     enable_kvm: vm.enable_kvm,
     enable_uefi: vm.enable_uefi,
     machine_type: vm.machine_type,
@@ -69,6 +74,7 @@ export default function VMSettingsDialog({ vmId, onClose, notify }) {
   const [notice, setNotice] = useState(null)
   const [showPicker, setShowPicker] = useState(false)
   const { isos, refresh: refreshISOs } = useISOs()
+  const capabilities = useCapabilities()
 
   async function load() {
     setLoading(true)
@@ -119,7 +125,9 @@ export default function VMSettingsDialog({ vmId, onClose, notify }) {
         network_interface: form.network_interface,
         vnc_password: form.vnc_password || null,
         boot_order: form.boot_order,
-        enable_kvm: form.enable_kvm,
+        virtualization: form.virtualization,
+        guest_arch: form.guest_arch,
+        enable_kvm: form.virtualization === 'kvm',
         enable_uefi: form.enable_uefi,
         machine_type: form.machine_type,
         usb_enabled: form.usb_enabled,
@@ -221,17 +229,25 @@ export default function VMSettingsDialog({ vmId, onClose, notify }) {
               description="Generation 2 virtual machine using UEFI firmware (OVMF)."
             />
           </Field>
-          <Field label="Machine type">
-            <select
-              className="input"
-              value={form.machine_type}
-              disabled={locked}
-              onChange={(e) => set('machine_type', e.target.value)}
-            >
-              <option value="q35">q35 — modern PCIe</option>
-              <option value="pc-i440fx">pc-i440fx — legacy</option>
-            </select>
-          </Field>
+          {form.guest_arch === 'x86_64' ? (
+            <Field label="Machine type">
+              <select
+                className="input"
+                value={form.machine_type}
+                disabled={locked}
+                onChange={(e) => set('machine_type', e.target.value)}
+              >
+                <option value="q35">q35 — modern PCIe</option>
+                <option value="pc-i440fx">pc-i440fx — legacy</option>
+              </select>
+            </Field>
+          ) : (
+            <div className="note">
+              {form.guest_arch === 'aarch64' || form.guest_arch === 'arm'
+                ? 'The ARM "virt" machine and its UEFI firmware are used automatically.'
+                : 'The generic machine type for this architecture is used automatically.'}
+            </div>
+          )}
         </>
       )
     }
@@ -295,34 +311,48 @@ export default function VMSettingsDialog({ vmId, onClose, notify }) {
               onChange={(e) => set('cpu_cores', Number(e.target.value))}
             />
           </Field>
-          <Field label="CPU model">
-            <select
-              className="input"
-              value={form.cpu_model}
-              disabled={locked}
-              onChange={(e) => set('cpu_model', e.target.value)}
-            >
-              <option value="qemu64">qemu64 — software emulation</option>
-              <option value="host">host — requires KVM</option>
-              <option value="Haswell">Haswell</option>
-              <option value="Skylake-Client">Skylake-Client</option>
-              <option value="EPYC">EPYC</option>
-            </select>
-          </Field>
-          <CheckRow
-            checked={form.enable_kvm}
+          {form.guest_arch === 'x86_64' ? (
+            <Field label="CPU model">
+              <select
+                className="input"
+                value={form.cpu_model}
+                disabled={locked}
+                onChange={(e) => set('cpu_model', e.target.value)}
+              >
+                <option value="qemu64">qemu64 — software emulation</option>
+                <option value="host">host — requires KVM</option>
+                <option value="Haswell">Haswell</option>
+                <option value="Skylake-Client">Skylake-Client</option>
+                <option value="EPYC">EPYC</option>
+              </select>
+            </Field>
+          ) : (
+            <div className="note">
+              The CPU model is provided by the selected guest architecture.
+            </div>
+          )}
+          <div className="note">
+            Hardware acceleration is configured under Virtualization.
+          </div>
+        </>
+      )
+    }
+
+    if (section === 'virtualization') {
+      return (
+        <>
+          <h2>Virtualization</h2>
+          <p style={{ margin: '0 0 10px', color: '#555' }}>
+            Choose how this virtual machine's instructions run on the server. Changing the guest
+            architecture of an existing virtual machine usually requires reinstalling the guest
+            operating system.
+          </p>
+          <VirtualizationSelector
+            capabilities={capabilities}
+            virtualization={form.virtualization}
+            guestArch={form.guest_arch}
+            onChange={set}
             disabled={locked}
-            onChange={(checked) => {
-              setForm((current) => ({
-                ...current,
-                enable_kvm: checked,
-                cpu_model: checked && current.cpu_model === 'qemu64'
-                  ? 'host'
-                  : !checked && current.cpu_model === 'host' ? 'qemu64' : current.cpu_model,
-              }))
-            }}
-            label="Use hardware acceleration (KVM)"
-            note="Requires /dev/kvm on the server host. When off, QEMU uses software emulation."
           />
         </>
       )

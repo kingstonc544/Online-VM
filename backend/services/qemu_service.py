@@ -1,7 +1,9 @@
 import asyncio
 import functools
 import os
+import platform
 import random
+import shutil
 import signal
 import socket
 import subprocess
@@ -17,6 +19,202 @@ adopted_pids: Dict[str, int] = {}
 
 KVM_DEVICE = "/dev/kvm"
 DEFAULT_BRIDGE = "br0"
+
+# Guest architectures this server can virtualize. "native" means the guest
+# architecture is the same as the host, so KVM can run it unmodified;
+# everything else is translated by QEMU's TCG engine (the Linux counterpart of
+# Apple's Rosetta translation layer, in full-system form).
+ARCHITECTURES: Dict[str, Dict[str, Any]] = {
+    "x86_64": {
+        "label": "x86-64 (64-bit Intel / AMD)",
+        "binary": "qemu-system-x86_64",
+        "machine": "q35",
+        "cpu": "qemu64",
+        "legacy_devices": True,
+        "firmware": ("ovmf",),
+    },
+    "i386": {
+        "label": "x86 (32-bit Intel)",
+        "binary": "qemu-system-i386",
+        "machine": "pc-i440fx",
+        "cpu": "qemu32",
+        "legacy_devices": True,
+        "firmware": ("ovmf",),
+    },
+    "aarch64": {
+        "label": "ARM64 (aarch64)",
+        "binary": "qemu-system-aarch64",
+        "machine": "virt",
+        "cpu": "max",
+        "legacy_devices": False,
+        "firmware": ("aavmf",),
+    },
+    "arm": {
+        "label": "ARM (32-bit)",
+        "binary": "qemu-system-arm",
+        "machine": "virt",
+        "cpu": "cortex-a15",
+        "legacy_devices": False,
+        "firmware": ("aavmf32",),
+    },
+}
+
+FIRMWARE_PATHS = {
+    "ovmf": ["/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF_CODE.fd"],
+    "aavmf": [
+        "/usr/share/AAVMF/AAVMF_CODE.fd",
+        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+    ],
+    "aavmf32": [
+        "/usr/share/AAVMF/AAVMF32_CODE.fd",
+        "/usr/share/qemu-efi-arm/QEMU_EFI.fd",
+    ],
+}
+
+ENGINE_LABELS = {
+    "auto": "Automatic",
+    "kvm": "Native (KVM)",
+    "tcg": "Translation (TCG)",
+}
+
+
+class VirtualizationUnavailable(RuntimeError):
+    """The requested type of virtualization cannot run on this host."""
+
+
+def host_arch() -> str:
+    """Normalized architecture of the host CPU."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "x86_64"
+    if machine in ("i386", "i486", "i586", "i686", "x86"):
+        return "i386"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    if machine.startswith("arm"):
+        return "arm"
+    return machine
+
+
+def normalize_arch(arch: Optional[str]) -> str:
+    """Return a supported architecture id, defaulting to x86_64."""
+    return arch if arch in ARCHITECTURES else "x86_64"
+
+
+def qemu_binary(arch: str) -> str:
+    return ARCHITECTURES[normalize_arch(arch)]["binary"]
+
+
+def binary_available(arch: str) -> bool:
+    return shutil.which(qemu_binary(arch)) is not None
+
+
+def firmware_path(kind: str) -> Optional[str]:
+    for path in FIRMWARE_PATHS.get(kind, []):
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def kvm_compatible(arch: str) -> bool:
+    """True when KVM can virtualize this guest architecture on this host."""
+    host = host_arch()
+    return arch == host or (host == "x86_64" and arch == "i386")
+
+
+def resolve_engine(vm: VMConfig) -> str:
+    """Pick the effective engine ('kvm' or 'tcg') for the VM, or explain why not."""
+    arch = normalize_arch(vm.guest_arch)
+    requested = vm.virtualization if vm.virtualization in ENGINE_LABELS else "auto"
+
+    if requested == "tcg":
+        return "tcg"
+
+    # KVM can only virtualize architectures the host CPU supports.
+    if not kvm_compatible(arch):
+        if requested == "kvm":
+            raise VirtualizationUnavailable(
+                f"Native KVM virtualization cannot run {ARCHITECTURES[arch]['label']} guests "
+                f"on this {ARCHITECTURES.get(host_arch(), {}).get('label', host_arch())} host. "
+                "Choose the translation (TCG) engine to emulate a foreign architecture."
+            )
+        return "tcg"
+
+    if not kvm_available():
+        if requested == "kvm":
+            raise VirtualizationUnavailable(
+                "Native KVM virtualization is unavailable: /dev/kvm is not present on this host. "
+                "Choose automatic or translation (TCG) mode instead."
+            )
+        return "tcg"
+
+    return "kvm"
+
+
+def capabilities() -> Dict[str, Any]:
+    """Describe the types of virtualization and guest architectures this host supports."""
+    kvm = kvm_available()
+    host = host_arch()
+
+    engines = [
+        {
+            "id": "auto",
+            "label": ENGINE_LABELS["auto"],
+            "available": True,
+            "reason": None,
+            "description": (
+                "Uses KVM whenever the host and guest architectures match and /dev/kvm is "
+                "available; otherwise falls back to software translation."
+            ),
+        },
+        {
+            "id": "kvm",
+            "label": ENGINE_LABELS["kvm"],
+            "available": kvm,
+            "reason": None if kvm else "/dev/kvm is not available on this host",
+            "description": (
+                "Runs guest instructions directly on the host CPU through hardware "
+                "virtualization. Fastest, but limited to the host architecture."
+            ),
+        },
+        {
+            "id": "tcg",
+            "label": ENGINE_LABELS["tcg"],
+            "available": True,
+            "reason": None,
+            "description": (
+                "Translates guest instructions to the host CPU at runtime — the Linux "
+                "counterpart of Apple's Rosetta — so foreign-architecture systems run "
+                "without hardware virtualization. Slower than KVM."
+            ),
+        },
+    ]
+
+    architectures = []
+    for arch, profile in ARCHITECTURES.items():
+        installed = binary_available(arch)
+        firmware_kind = profile["firmware"][0]
+        firmware_ok = firmware_kind == "ovmf" or firmware_path(firmware_kind) is not None
+        reason = None
+        if not installed:
+            reason = f"{profile['binary']} is not installed on the server"
+        elif not firmware_ok:
+            reason = "UEFI firmware for this architecture is not installed on the server"
+        architectures.append({
+            "id": arch,
+            "label": profile["label"],
+            "available": installed and firmware_ok,
+            "native": arch == host,
+            "reason": reason,
+        })
+
+    return {
+        "host_arch": host,
+        "host_label": ARCHITECTURES.get(host, {}).get("label", host),
+        "kvm_available": kvm,
+        "engines": engines,
+        "architectures": architectures,
+    }
 
 
 def monitor_socket_path(vm_id: str) -> str:
@@ -123,37 +321,70 @@ def find_free_vnc_port() -> int:
 
 
 def build_qemu_args(vm: VMConfig) -> List[str]:
-    """Build the complete qemu-system-x86_64 argument list for the given VM config."""
-    args = ["qemu-system-x86_64"]
+    """Build the QEMU argument list for the VM's selected type of virtualization."""
+    arch = normalize_arch(vm.guest_arch)
+    profile = ARCHITECTURES[arch]
+    binary = profile["binary"]
+    if not binary_available(arch):
+        raise VirtualizationUnavailable(
+            f"{profile['label']} emulation is not installed on the server ({binary} is missing)."
+        )
+
+    engine = resolve_engine(vm)
+    legacy = profile["legacy_devices"]
+
+    args = [binary]
 
     # Name
     args += ["-name", vm.name]
 
-    # Machine type — KVM acceleration is only requested when the host can provide it.
-    use_kvm = vm.enable_kvm and kvm_available()
-    if use_kvm:
-        args += ["-machine", f"{vm.machine_type},accel=kvm"]
+    # Machine type. x86 keeps the configured chipset; other architectures use
+    # their generic "virt" board, which only exists with the right firmware.
+    if arch == "x86_64" and vm.machine_type in ("q35", "pc-i440fx"):
+        machine = vm.machine_type
     else:
-        args += ["-machine", vm.machine_type]
+        machine = profile["machine"]
+
+    if engine == "kvm":
+        args += ["-machine", f"{machine},accel=kvm"]
+    else:
+        args += ["-machine", machine]
         # Multi-threaded TCG plus a larger translation cache is noticeably
-        # faster than the single-threaded default when KVM is unavailable.
+        # faster than the single-threaded default. This is the translation
+        # layer that runs foreign-architecture guests on this host.
         args += ["-accel", "tcg,thread=multi,tb-size=512"]
 
     # CPU ("host" only exists with KVM; TCG needs a portable model)
-    cpu_model = vm.cpu_model
-    if not use_kvm and cpu_model in ("host", "host-passthrough"):
-        cpu_model = "max"
+    if legacy:
+        cpu_model = vm.cpu_model or profile["cpu"]
+        if engine == "tcg" and cpu_model in ("host", "host-passthrough"):
+            cpu_model = "max"
+        if arch == "i386" and cpu_model not in ("qemu32", "pentium3", "coreduo"):
+            cpu_model = profile["cpu"]
+    else:
+        cpu_model = profile["cpu"]
     args += ["-cpu", cpu_model]
     args += ["-smp", str(vm.cpu_cores)]
     args += ["-m", str(vm.ram_mb)]
 
     # Disk
     if vm.disk_path:
-        args += ["-drive", f"file={vm.disk_path},format={vm.disk_format},if=virtio,cache=writeback"]
+        disk = f"file={vm.disk_path},format={vm.disk_format},cache=writeback"
+        if legacy:
+            args += ["-drive", f"{disk},if=virtio"]
+        else:
+            args += ["-drive", f"{disk},if=none,id=disk0"]
+            args += ["-device", "virtio-blk-pci,drive=disk0"]
 
-    # CD-ROM / ISO
+    # CD-ROM / ISO. x86 boards offer an IDE CD-ROM; virt boards attach the
+    # image through virtio-scsi instead.
     if vm.iso_path:
-        args += ["-cdrom", vm.iso_path]
+        if legacy:
+            args += ["-cdrom", vm.iso_path]
+        else:
+            args += ["-drive", f"file={vm.iso_path},format=raw,media=cdrom,readonly=on,if=none,id=cd0"]
+            args += ["-device", "virtio-scsi-pci,id=scsi0"]
+            args += ["-device", "scsi-cd,drive=cd0"]
 
     # Boot order
     args += ["-boot", f"order={vm.boot_order}"]
@@ -191,21 +422,38 @@ def build_qemu_args(vm: VMConfig) -> List[str]:
 
     # USB
     if vm.usb_enabled:
-        args += ["-usb", "-device", "usb-tablet"]
+        if legacy:
+            args += ["-usb", "-device", "usb-tablet"]
+        else:
+            # virt boards have no legacy USB controller.
+            args += ["-device", "qemu-xhci,id=xhci"]
+            args += ["-device", "usb-tablet,bus=xhci.0"]
 
     # Sound
     if vm.sound_enabled:
+        sound_model = vm.sound_model if legacy else "ich9-intel-hda"
         args += ["-audiodev", f"{audio_driver()},id=audio0"]
-        if "hda" in vm.sound_model.lower():
+        if "hda" in sound_model.lower():
             # HDA controllers have no audiodev property; the codec carries it.
-            args += ["-device", vm.sound_model]
+            args += ["-device", sound_model]
             args += ["-device", "hda-duplex,audiodev=audio0"]
         else:
-            args += ["-device", f"{vm.sound_model},audiodev=audio0"]
+            args += ["-device", f"{sound_model},audiodev=audio0"]
 
-    # UEFI
-    if vm.enable_uefi:
-        args += ["-bios", "/usr/share/ovmf/OVMF.fd"]
+    # Firmware. x86 can use BIOS or OVMF; every other board has no legacy BIOS
+    # and boots the architecture's UEFI firmware.
+    if not legacy:
+        kind = profile["firmware"][0]
+        path = firmware_path(kind)
+        if not path:
+            raise VirtualizationUnavailable(
+                f"UEFI firmware for {profile['label']} is not installed on the server."
+            )
+        args += ["-drive", f"if=pflash,format=raw,readonly=on,file={path}"]
+    elif vm.enable_uefi:
+        path = firmware_path("ovmf")
+        if path:
+            args += ["-bios", path]
 
     return args
 

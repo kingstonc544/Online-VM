@@ -15,8 +15,13 @@ router = APIRouter()
 # ──────────────────────────────────────────────
 
 def vm_alive(vm: VMConfig) -> bool:
-    """True when the VM's QEMU process (or at least its VNC port) is still up."""
-    return qemu.is_running(vm.id) or qemu.vnc_port_open(vm.vnc_port)
+    """True when this VM's own QEMU process is still up.
+
+    The process is identified by its monitor socket, which survives a backend
+    reload. A listening VNC port is not used as evidence: stopped VMs keep the
+    default port 5900, which another running VM may own.
+    """
+    return qemu.is_running(vm.id)
 
 
 async def reconcile_status(vm: VMConfig) -> VMConfig:
@@ -96,7 +101,7 @@ async def start_vm(vm_id: str):
     vm = await store.get_vm(vm_id)
     if not vm:
         raise HTTPException(status_code=404, detail="VM not found")
-    if qemu.is_running(vm_id) or qemu.vnc_port_open(vm.vnc_port):
+    if qemu.is_running(vm_id):
         # The QEMU process can outlive a backend reload; adopt it instead of
         # spawning a second one on the same disk.
         if vm.status != "running":
@@ -109,6 +114,10 @@ async def start_vm(vm_id: str):
         vm.status = "running"
         vm.vnc_port = qemu.running_vms[vm_id]["vnc_port"]
         await store.save_vm(vm)
+    except qemu.VirtualizationUnavailable as exc:
+        vm.status = "stopped"
+        await store.save_vm(vm)
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         vm.status = "error"
         await store.save_vm(vm)

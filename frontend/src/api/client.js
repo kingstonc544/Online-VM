@@ -2,6 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api' })
 
+export const getCapabilities = () => api.get('/host/capabilities').then(r => r.data)
 export const getVMs = () => api.get('/vms').then(r => r.data)
 export const createVM = (data) => api.post('/vms', data).then(r => r.data)
 export const getVM = (id) => api.get(`/vms/${id}`).then(r => r.data)

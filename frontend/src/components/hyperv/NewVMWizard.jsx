@@ -3,7 +3,9 @@ import { Check } from 'lucide-react'
 import Dialog from './Dialog'
 import { CheckRow, Field, RadioRow } from './Controls'
 import ISOPickerDialog from './ISOPickerDialog'
+import VirtualizationSelector, { architectureLabel, effectiveEngine } from './VirtualizationSelector'
 import useISOs from '../../hooks/useISOs'
+import useCapabilities from '../../hooks/useCapabilities'
 import { createVM } from '../../api/client'
 import { formatMemory } from '../../utils/format'
 
@@ -11,6 +13,7 @@ const STEPS = [
   { key: 'before', title: 'Before You Begin' },
   { key: 'name', title: 'Specify Name and Location' },
   { key: 'generation', title: 'Specify Generation' },
+  { key: 'virtualization', title: 'Choose Virtualization' },
   { key: 'memory', title: 'Assign Memory' },
   { key: 'network', title: 'Configure Networking' },
   { key: 'disk', title: 'Connect Virtual Hard Disk' },
@@ -33,6 +36,8 @@ const DEFAULTS = {
   display_type: 'vnc',
   vnc_password: null,
   boot_order: 'dc',
+  virtualization: 'auto',
+  guest_arch: 'x86_64',
   enable_kvm: false,
   enable_uefi: false,
   machine_type: 'q35',
@@ -53,6 +58,7 @@ export default function NewVMWizard({ onClose, onCreated }) {
   const [submitting, setSubmitting] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const { isos, refresh: refreshISOs } = useISOs()
+  const capabilities = useCapabilities()
 
   function set(key, value) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -93,6 +99,7 @@ export default function NewVMWizard({ onClose, onCreated }) {
           <ul>
             <li>Specify a name and location for the virtual machine.</li>
             <li>Choose the generation of the virtual machine (BIOS or UEFI).</li>
+            <li>Choose the type of virtualization — native KVM or software translation.</li>
             <li>Assign memory and configure networking.</li>
             <li>Connect a virtual hard disk and choose an installation source.</li>
           </ul>
@@ -159,6 +166,26 @@ export default function NewVMWizard({ onClose, onCreated }) {
             Generation 2 requires an operating system that supports UEFI. The selection can be changed
             in the virtual machine settings while it is turned off.
           </div>
+        </>
+      )
+    }
+
+    if (page === 'virtualization') {
+      return (
+        <>
+          <h2>Choose the Type of Virtualization</h2>
+          <p>
+            Select how the virtual machine runs on this server. Native KVM runs guest code
+            directly on the CPU, while the translation engine rewrites guest instructions at
+            runtime — the Linux equivalent of Apple's Rosetta — so other architectures can run
+            here too.
+          </p>
+          <VirtualizationSelector
+            capabilities={capabilities}
+            virtualization={form.virtualization}
+            guestArch={form.guest_arch}
+            onChange={set}
+          />
         </>
       )
     }
@@ -379,7 +406,15 @@ export default function NewVMWizard({ onClose, onCreated }) {
           </div>
           <div><dt>Virtual hard disk</dt><dd>{diskName(form.name, form.disk_format)} — {form.disk_size_gb} GB ({form.disk_format})</dd></div>
           <div><dt>Installation source</dt><dd>{form.iso_path ? (isos.find((iso) => iso.path === form.iso_path)?.name || form.iso_path) : 'Install later'}</dd></div>
-          <div><dt>Hardware acceleration</dt><dd>KVM off — enable it in Settings on a host with /dev/kvm</dd></div>
+          <div><dt>Guest architecture</dt><dd>{architectureLabel(form.guest_arch, capabilities)}</dd></div>
+          <div>
+            <dt>Type of virtualization</dt>
+            <dd>
+              {effectiveEngine(form.virtualization, form.guest_arch, capabilities) === 'kvm'
+                ? 'Native — KVM hardware virtualization'
+                : 'Translation — QEMU TCG (Rosetta-style)'}
+            </dd>
+          </div>
         </dl>
       </>
     )
